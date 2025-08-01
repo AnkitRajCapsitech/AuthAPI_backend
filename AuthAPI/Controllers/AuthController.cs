@@ -1,4 +1,5 @@
 ﻿using AuthAPI.Services;
+using Microsoft.AspNetCore.Identity.Data;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 
@@ -34,6 +35,24 @@ namespace AuthAPI.Controllers
 
             return Ok(new { Token = token });
         }
+
+        [HttpPost("forgot-password")]
+        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+        {
+            var result = await _authService.ForgetPasswordAsync(request.Email);
+            return Ok(result);
+        }
+
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+        {
+            var result = await _authService.ResetPasswordAsync(request.Token, request.NewPassword);
+            if (result == "Invalid or expired token")
+                return BadRequest(result);
+
+            return Ok(result);
+        }
+
     }
 
     public class RegisterRequest
@@ -47,5 +66,16 @@ namespace AuthAPI.Controllers
     {
         public string Email { get; set; } = null!;
         public string Password { get; set; } = null!;
+    }
+
+    public class ForgotPasswordRequest
+    {
+        public string Email { get; set; } = null!;
+    }
+
+    public class ResetPasswordRequest
+    {
+        public string Token { get; set; } = null!;
+        public string NewPassword { get; set; } = null!;
     }
 }

@@ -43,6 +43,7 @@ namespace AuthAPI.Services
 
         public async Task<string> LoginAsync(string email, string password)
         {
+
             var user = await _context.Users.Find(u => u.Email == email).FirstOrDefaultAsync();
             if (user == null || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
                 return "Invalid credentials";
@@ -70,5 +71,48 @@ namespace AuthAPI.Services
             var token = tokenHandler.CreateToken(tokenDescriptor);
             return tokenHandler.WriteToken(token);
         }
+
+        public async Task<string> ForgetPasswordAsync(string email)
+        {
+            var user = await _context.Users.Find(u => u.Email == email).FirstOrDefaultAsync();
+            if (user == null)
+                return "User not found";
+
+            // Generate token
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(64));
+            var expiry = DateTime.UtcNow.AddHours(1);
+
+            var update = Builders<User>.Update
+                .Set(u => u.ResetToken, token)
+                .Set(u => u.ResetTokenExpiry, expiry);
+
+            await _context.Users.UpdateOneAsync(u => u.Id == user.Id, update);
+
+            // In real app: send token via email
+            return $"Reset token (for testing): {token}";
+        }
+
+        public async Task<string> ResetPasswordAsync(string token, string newPassword)
+        {
+            var user = await _context.Users.Find(u =>
+                u.ResetToken == token &&
+                u.ResetTokenExpiry > DateTime.UtcNow
+            ).FirstOrDefaultAsync();
+
+            if (user == null)
+                return "Invalid or expired token";
+
+            var hashedPassword = BCrypt.Net.BCrypt.HashPassword(newPassword);
+
+            var update = Builders<User>.Update
+                .Set(u => u.PasswordHash, hashedPassword)
+                .Unset(u => u.ResetToken)
+                .Unset(u => u.ResetTokenExpiry);
+
+            await _context.Users.UpdateOneAsync(u => u.Id == user.Id, update);
+
+            return "Password reset successfully";
+        }
+
     }
 }

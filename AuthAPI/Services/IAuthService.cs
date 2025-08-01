@@ -9,6 +9,9 @@ namespace AuthAPI.Services
         
         Task<string> RegisterAsync(string username, string email, string password);
         Task<string> LoginAsync(string email, string password);
-       
+
+        Task<string> ForgetPasswordAsync(string email);
+        Task<string> ResetPasswordAsync(string token, string newPassword);
+
     }
 }
