@@ -1,19 +1,14 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
-namespace AuthAPI.Models
+public class  User
 {
-    public class User
-    {
-        [BsonId]
-        [BsonRepresentation(BsonType.ObjectId)]
-        public string Id { get; set; }
+    [BsonId]
+    [BsonRepresentation(BsonType.ObjectId)]
+    public string? Id { get; set; }
+    public string Username { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
 
-        public string Username { get; set; } = null!;
-        public string Email { get; set; } = null!;
-        public string PasswordHash { get; set; } = null!;
+    public string HashedPassword { get; set; } = string.Empty;
 
-        public string? ResetToken { get; set; }
-        public DateTime? ResetTokenExpiry { get; set; }
-    }
 }

@@ -1,118 +1,126 @@
-﻿using AuthAPI.Data;
-using AuthAPI.Models;
-using Microsoft.Extensions.Configuration;
+﻿using AuthAPI.DTOs;
+using Microsoft.Extensions.ObjectPool;
 using Microsoft.IdentityModel.Tokens;
 using MongoDB.Driver;
 using System.IdentityModel.Tokens.Jwt;
-using System.Linq.Expressions;
 using System.Security.Claims;
-using System.Security.Cryptography;
 using System.Text;
 
 namespace AuthAPI.Services
 {
-    public class AuthService : IAuthService
+    public class AuthService
     {
-        private readonly UserContext _context;
-        private readonly IConfiguration _config;
+        private readonly IMongoCollection<User> _users;
+        private readonly string _jwtKey;
+        private readonly string _jwtIssuer;
+        private readonly string _jwtAudience;
 
-         public AuthService(UserContext context, IConfiguration config)
+        public AuthService(IConfiguration configuration)
         {
-            _context = context;
-            _config = config;
+            var connectionString = configuration["MongoDbSettings:ConnectionString"];
+            var mongoClient = new MongoClient(connectionString);
+            var database = mongoClient.GetDatabase("AuthDb");
+            _users = database.GetCollection<User>("Users");
+           
+            _jwtKey = configuration["Jwt:Key"];
+            _jwtIssuer = configuration["Jwt:Issuer"];
+            _jwtAudience = configuration["Jwt:Audience"];
         }
 
-        public async Task<string> RegisterAsync(string username, string email, string password)
+         public async Task<ApiResponse<object>>RegisterAsync(RegisterDto dto)
         {
-            var existingUser = await _context.Users.Find(u => u.Email == email).FirstOrDefaultAsync();
-            if (existingUser != null)
-                return "User already exists";
-
-            var hashedPassword = BCrypt.Net.BCrypt.HashPassword(password);
-            var user = new User
+            var response = new ApiResponse<object>();
+            try
             {
-                Username = username,
-                Email = email,
-                PasswordHash = hashedPassword
-            };
-
-            await _context.Users.InsertOneAsync(user);
-            return "User registered successfully";
-        }
-       
-
-        public async Task<string> LoginAsync(string email, string password)
-        {
-
-            var user = await _context.Users.Find(u => u.Email == email).FirstOrDefaultAsync();
-            if (user == null || !BCrypt.Net.BCrypt.Verify(password, user.PasswordHash))
-                return "Invalid credentials";
-
-            // Generate JWT
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.ASCII.GetBytes(_config["Jwt:Key"]);
-            
-            var tokenDescriptor = new SecurityTokenDescriptor
-            {
-                Subject = new ClaimsIdentity(new[]
-                {
-                    new Claim(ClaimTypes.NameIdentifier, user.Id),
-                    new Claim(ClaimTypes.Email, user.Email),
-                    new Claim(ClaimTypes.Name, user.Username)
-                }),
-                
-                Expires = DateTime.UtcNow.AddHours(1),
+                var existingUser = await _users.Find(u => u.Email == dto.Email).FirstOrDefaultAsync();
                
-                SigningCredentials = new SigningCredentials(
-                    new SymmetricSecurityKey(key),
-                    SecurityAlgorithms.HmacSha256Signature)
-            };
+                if(existingUser!= null)
+                {
+                    response.Status = false;
+                    response.Message = "User already exists";
+                    return response;  
+                }
 
-            var token = tokenHandler.CreateToken(tokenDescriptor);
-            return tokenHandler.WriteToken(token);
+                var hashedPassword = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+
+                var user = new User
+                {
+                    Username = dto.Username,
+                    Email = dto.Email,
+                    HashedPassword = hashedPassword
+                };
+
+                await _users.InsertOneAsync(user);
+                response.Status = true;
+                response.Message = "User registered successfully";
+            }
+            catch(Exception ex)
+            {
+                response.Status = false;
+                response.Message = "Error:" + ex.Message;
+            }
+
+            return response;
         }
 
-        public async Task<string> ForgetPasswordAsync(string email)
+        public async Task<ApiResponse<string>>LoginAsync(LoginDto dto)
         {
-            var user = await _context.Users.Find(u => u.Email == email).FirstOrDefaultAsync();
-            if (user == null)
-                return "User not found";
+            var response = new ApiResponse<string>();
 
-            // Generate token
-            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(64));
-            var expiry = DateTime.UtcNow.AddHours(1);
+            try
+            {
+                var user = await _users.Find(u => u.Email == dto.Email).FirstOrDefaultAsync();
+                if(user==null|| string.IsNullOrEmpty(user.HashedPassword)|| !BCrypt.Net.BCrypt.Verify(dto.Password,user.HashedPassword))
+                {
+                    response.Status = false;
+                    response.Message = "Invalid email or password";
+                    return response;
+                }
 
-            var update = Builders<User>.Update
-                .Set(u => u.ResetToken, token)
-                .Set(u => u.ResetTokenExpiry, expiry);
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var key = Encoding.ASCII.GetBytes(_jwtKey);
 
-            await _context.Users.UpdateOneAsync(u => u.Id == user.Id, update);
+                var tokenDescriptor = new SecurityTokenDescriptor
+                {
+                    Subject = new ClaimsIdentity(new[]
+                    {
+                        new Claim(ClaimTypes.NameIdentifier, user.Id),
+                        new Claim(ClaimTypes.Email, user.Email),
+                        new Claim(ClaimTypes.Name, user.Username)
 
-            // In real app: send token via email
-            return $"Reset token (for testing): {token}";
+                    }),
+
+                    Expires = DateTime.UtcNow.AddHours(1),
+                    Issuer = _jwtIssuer,
+                    Audience = _jwtAudience,
+
+                    SigningCredentials = new SigningCredentials(
+                        new SymmetricSecurityKey(key),
+                        SecurityAlgorithms.HmacSha256Signature
+                        )
+
+                   
+                };
+
+                var token = tokenHandler.CreateToken(tokenDescriptor);
+                var jwtToken = tokenHandler.WriteToken(token);
+
+                response.Status = true;
+                response.Message = "Login successful";
+                response.Result = jwtToken;
+
+
+            }
+            catch(Exception ex)
+            {
+                response.Status = false;
+                response.Message = "Error:" + ex.Message;
+                response.Result = null;
+            }
+
+            return response;
         }
-
-        public async Task<string> ResetPasswordAsync(string token, string newPassword)
-        {
-            var user = await _context.Users.Find(u =>
-                u.ResetToken == token &&
-                u.ResetTokenExpiry > DateTime.UtcNow
-            ).FirstOrDefaultAsync();
-
-            if (user == null)
-                return "Invalid or expired token";
-
-            var hashedPassword = BCrypt.Net.BCrypt.HashPassword(newPassword);
-
-            var update = Builders<User>.Update
-                .Set(u => u.PasswordHash, hashedPassword)
-                .Unset(u => u.ResetToken)
-                .Unset(u => u.ResetTokenExpiry);
-
-            await _context.Users.UpdateOneAsync(u => u.Id == user.Id, update);
-
-            return "Password reset successfully";
-        }
-
     }
+
+   
 }
