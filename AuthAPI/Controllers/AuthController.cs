@@ -23,11 +23,17 @@ namespace AuthAPI.Controllers
         }
 
         [HttpPost("login")]
-        public async Task<ApiResponse<string>> Login([FromBody] LoginDto dto)
+        public async Task<ApiResponse<AuthResponseDto>> Login([FromBody] LoginDto dto)
         {
             return await _authService.LoginAsync(dto);
         }
 
+
+        [HttpPost("refresh-token")]
+        public async Task<ApiResponse<AuthResponseDto>> RefreshToken([FromBody] TokenRefreshDto dto)
+        {
+            return await _authService.RefreshTokenAsync(dto.RefreshToken);
+        }
        
     }
 

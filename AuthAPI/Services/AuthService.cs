@@ -63,62 +63,100 @@ namespace AuthAPI.Services
             return response;
         }
 
-        public async Task<ApiResponse<string>>LoginAsync(LoginDto dto)
+        public async Task<ApiResponse<AuthResponseDto>> LoginAsync(LoginDto dto)
         {
-            var response = new ApiResponse<string>();
+            var response = new ApiResponse<AuthResponseDto>();
 
             try
             {
                 var user = await _users.Find(u => u.Email == dto.Email).FirstOrDefaultAsync();
-                if(user==null|| string.IsNullOrEmpty(user.HashedPassword)|| !BCrypt.Net.BCrypt.Verify(dto.Password,user.HashedPassword))
+                if (user == null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.HashedPassword))
                 {
                     response.Status = false;
                     response.Message = "Invalid email or password";
                     return response;
                 }
 
-                var tokenHandler = new JwtSecurityTokenHandler();
-                var key = Encoding.ASCII.GetBytes(_jwtKey);
+                var accessToken = GenerateAccessToken(user);
+                var refreshToken = GenerateRefreshToken();
 
-                var tokenDescriptor = new SecurityTokenDescriptor
-                {
-                    Subject = new ClaimsIdentity(new[]
-                    {
-                        new Claim(ClaimTypes.NameIdentifier, user.Id),
-                        new Claim(ClaimTypes.Email, user.Email),
-                        new Claim(ClaimTypes.Name, user.Username)
+                user.RefreshToken = refreshToken;
+                user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
 
-                    }),
-
-                    Expires = DateTime.UtcNow.AddHours(1),
-                    Issuer = _jwtIssuer,
-                    Audience = _jwtAudience,
-
-                    SigningCredentials = new SigningCredentials(
-                        new SymmetricSecurityKey(key),
-                        SecurityAlgorithms.HmacSha256Signature
-                        )
-
-                   
-                };
-
-                var token = tokenHandler.CreateToken(tokenDescriptor);
-                var jwtToken = tokenHandler.WriteToken(token);
+                await _users.ReplaceOneAsync(u => u.Id == user.Id, user);
 
                 response.Status = true;
                 response.Message = "Login successful";
-                response.Result = jwtToken;
-
-
+                response.Result = new AuthResponseDto
+                {
+                    AccessToken = accessToken,
+                    RefreshToken = refreshToken
+                };
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 response.Status = false;
-                response.Message = "Error:" + ex.Message;
-                response.Result = null;
+                response.Message = "Error: " + ex.Message;
             }
 
             return response;
+        }
+        public async Task<ApiResponse<AuthResponseDto>> RefreshTokenAsync(string refreshToken)
+        {
+            var response = new ApiResponse<AuthResponseDto>();
+
+            var user = await _users.Find(u => u.RefreshToken == refreshToken).FirstOrDefaultAsync();
+            if (user == null || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                response.Status = false;
+                response.Message = "Invalid or expired refresh token";
+                return response;
+            }
+
+            var newAccessToken = GenerateAccessToken(user);
+            var newRefreshToken = GenerateRefreshToken();
+
+            user.RefreshToken = newRefreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            await _users.ReplaceOneAsync(u => u.Id == user.Id, user);
+
+            response.Status = true;
+            response.Message = "Token refreshed successfully";
+            response.Result = new AuthResponseDto
+            {
+                AccessToken = newAccessToken,
+                RefreshToken = newRefreshToken
+            };
+
+            return response;
+        }
+
+        private string GenerateAccessToken(User user)
+        {
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var key = Encoding.ASCII.GetBytes(_jwtKey);
+
+            var tokenDescriptor = new SecurityTokenDescriptor
+            {
+                Subject = new ClaimsIdentity(new[]
+                {
+                    new Claim(ClaimTypes.NameIdentifier, user.Id),
+                    new Claim(ClaimTypes.Email, user.Email),
+                    new Claim(ClaimTypes.Name, user.Username)
+                }),
+                Expires = DateTime.UtcNow.AddHours(1),
+                Issuer = _jwtIssuer,
+                Audience = _jwtAudience,
+                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+            };
+
+            var token = tokenHandler.CreateToken(tokenDescriptor);
+            return tokenHandler.WriteToken(token);
+        }
+
+        private string GenerateRefreshToken()
+        {
+            return Convert.ToBase64String(Guid.NewGuid().ToByteArray());
         }
     }
 
