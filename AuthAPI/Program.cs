@@ -7,6 +7,7 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<AuthService>();
+builder.Services.AddScoped<TodoService>();
 
 
 
